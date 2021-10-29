@@ -1,0 +1,320 @@
+---
+title: "Methods of Identifying Cardio-metabolic Risk Factors in Obese Individuals"
+author: "Emiline Doerr"
+date: "`r Sys.Date()`"
+output: html_notebook
+bibliography: references.bib
+biblio-style: "apalike"
+link-citations: true
+---
+
+This analysis was done for a project which looked at the reproducibility of 
+bioinformatics methods used in obesity and metabolic health studies.
+
+The study reproduced in this analysis was performed by Rovira et al. Authors applied microarray analysis, miRNA target prediction, pathway enrichment analysis, and statistical analysis to serum miRNAs which they collected from 10 MHO and 10 MUO individuals. 
+
+The data used in this analysis is provided on GEO. Further description can be found under the data import section below.
+
+
+Contents:
+
+
+1. [Environment Setup]
+    1. [Install Packages]
+    1. [Download Files]
+1. [Data processing]
+1. [Differential gene expression assessment with limma moderated t-statistics]
+1. 
+1. [References]
+
+
+## Environment setup
+
+### Install Packages
+```{r}
+# Installs
+install.packages("BiocManager")
+install.packages("devtools")
+
+# Bioconductor library installs
+BiocManager::install(c("GEOquery","affy","oligo", "pd.mirna.4.0","multiMiR"))
+
+#all libraries
+library(BiocManager)
+library(devtools)
+library(GEOquery)
+library(limma)
+library(affy)
+library(oligo)
+library(pd.mirna.4.0)
+library(Biobase)
+library(preprocessCore)
+library(multiMiR)
+```
+
+Download the raw CAL tar file from the GEO database.
+
+
+The dataset describing the samples collected by Rovira et al. is obtained from the CEL tar file provided for GEO Series GSE169290.
+
+The dataset contains CEL files for each of 20 serum samples: 10 metabolically healthy obese (MHO), 10 metabolically unhealthy obese (MUO). 
+
+CEL files contain non-coding RNA profiling data for the sample measured by Affymetrix Multispecies miRNA-4 Array.
+
+
+The sample IDs, classification (healthy/unhealthy), and miRNA IDs are provided in the supplemental information from Rovira et al.  were translated into a csv file to create a design matrix for the samples. 
+
+
+### Download Files 
+```{r}
+# set working directory for download
+working_dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+setwd(working_dir)
+
+# Download CEL tar file from GEO database
+library(GEOquery)
+citation("GEOquery")
+getGEOSuppFiles("GSE169290")
+
+# Directory with tar
+raw_dir <- paste(working_dir, "/GSE169290/", sep = "")
+
+# Untar CEL files to the working directory
+untar(paste(raw_dir, "GSE169290_RAW.tar", sep = ""))
+untar("GSE169290_RAW.tar")
+
+```
+
+
+## Data processing
+1. Load data
+1. Correct intensity backgrounds by RMA
+1. Normalization by quantiles
+```{r}
+# Find CEL files in working directory
+cel_files <- list.files("./", pattern = "CEL")
+
+# Process CEL files and store raw data
+# Use package specific to Affymetrix miRNA-4 Array Platform used
+library(pd.mirna.4.0)
+raw_dat <- read.celfiles(cel_files, pkgname="pd.mirna.4.0")
+
+# Correct intensity backgrounds in raw data by RMA
+eset <- rma(raw_dat)
+
+# Convert to an expression matrix
+expr<-exprs(eset)
+
+
+# Normalize by quantiles
+library(preprocessCore)
+norm_expr <- normalize.quantiles(expr)
+
+
+feat_names <- Biobase::featureNames(eset)
+
+# Use miRNA IDs from expression dataset for column names
+colnames(norm_expr) <- gsub("_.*.CEL.gz","",colnames(eset))
+
+# Preview
+print(head(norm_expr))
+
+# Rows are miRNAs (36353)
+# Columns are samples
+
+```
+
+
+## Playing around
+```{r}
+
+
+norm_expr[,1]
+
+```
+
+
+chunk of code from resource:
+```{r}
+#pdata <- pData(eset)
+#edata <- as.data.frame(exprs(eset))
+#fdata <- fData(eset)
+#edata <- log2(edata + 1)
+#edata <- edata[rowMeans(edata) > 3, ]
+#colramp <- colorRampPalette(c(3,"white", 2))(20)
+#plot(density(norm_expr[,1]),col=colramp[1],lwd=3,ylim=c(0,.20))
+#for(i in 2:20){lines(density(edata[,i]),lwd=3,col=colramp[i])}
+```
+
+## Differential gene expression assessment with limma moderated t-statistics
+
+*TODO: map genes*
+
+*TODO: remove top and bottom five*
+`#norm_expr <- normalize.quantiles.robust(expr, n.remove = 5)` maybe?
+*TODO: Non-mature human miRNAs excluded from downstream analysis*
+
+```{r}
+## Differential gene expression with limma moderated t-statistics
+library(limma)
+
+# Read csv with sample descriptions
+sample_file <- read.csv(file="sample_descriptions.csv")
+samples <- as.data.frame(sample_file)
+
+# Get second row with healthy/unhealthy classifications for the sample columns
+groups <- samples[2,]
+
+# Create design matrix with healthy vs. unhealthy samples
+groups <- gsub("unhealthy","1",groups)
+groups <- gsub("healthy","0",groups)
+factor <- as.factor(groups)
+design <- model.matrix(~ 0+factor, data=factor)
+colnames(design)<-c("healthy","unhealthy")
+
+# Create contrast matrix
+contrast.matrix<-makeContrasts(unhealthy-healthy, levels=design)
+
+# fit the expression data into a linear model
+fit <- lmFit(eset, design)
+fit <- contrasts.fit(fit, contrast.matrix)
+
+# Empirical Bayes to adjust variances, computes t-stat, std. error, logFC, log odd
+fit2 <- eBayes(fit)
+
+# toptable to summarize results
+# Used maximum number of genes
+results <- topTable(fit2, adjust="BH", number = 50000, sort.by = "B")
+# Preview 
+head(results)
+```
+### Upregulated genes
+- Rovira et al got 72 upregulated
+
+```{r}
+
+upreg <- subset(results, results$logFC>0)
+print(upreg[1:5])
+
+# Remove ending in miRNA identifiers to match miRTarBase
+rownames(upreg) <- gsub("_st","",rownames(upreg))
+up_miRNAs <- rownames(upreg)
+
+# Query database for validated targets using miRNA ids
+library(multiMiR)
+
+(miRNA <- up_miRNAs[1:5])
+up <- get_multimir(org = 'hsa', mirna = miRNA, table = 'mirtarbase', summary = TRUE)
+updata <- up@data
+upindex <- match(updata$mature_mirna_acc, upreg)
+
+upmirna_result <- na.omit(updata$mature_mirna_acc)
+
+match(updata$mature_mirna_acc, upreg)
+
+
+merge(rownames(upreg), updata$mature_mirna_id[upindex])
+
+
+multimr_results_up <- get_multimir(org = 'hsa', mirna = up_miRNAs, table = 'mirtarbase', summary = TRUE)
+miRtb_data <- multimr_results_up@data
+head(miRtb_data)
+table <- cbind2(upreg, miRtb_data)
+miRtb_data$target_symbol <- sub('NULL', NA, miRtb_data$target_symbol)
+
+select.list()
+
+miRtb_data[rownames()]
+
+#  lucif <- select(example1, keytype = "type", keys = "validated", 
+ #                 columns = columns(example1))
+#  lucif[grep("Luciferase", lucif$experiment), ]
+```
+
+
+### Downregulated genes
+- Rovira et al got 87 downregulated
+```{r}
+
+downreg <- subset(results, results$logFC<0)
+downreg[1:5]
+
+```
+
+t-statistic for each gene with p-value
+*TODO*
+```{r}
+# t-statistic for each gene with p-value
+```
+
+Top 5 up and downregulated in MUO vs MHO (Table 2)
+*TODO*
+```{r}
+```
+
+Volcano plot
+*TODO*
+[resource](https://biocorecrg.github.io/CRG_RIntroduction/volcano-plots.html)
+```{r}
+
+```
+
+## Target prediction with miRTarBase
+*if none found, use TargetScanHuman*
+```{r}
+# Remove ending in miRNA identifiers to match miRTarBase
+rownames(results) <- gsub("_st","",rownames(results))
+miRNAs <- rownames(results)
+
+# Query database for validated targets using miRNA ids
+library(multiMiR)
+multimr_results <- get_multimir(org = 'mmu', mirna = miRNAs, table = 'validated', summary = TRUE)
+miRtb_data <- multimr_results@data
+head(miRtb_data)
+colnames(miRtb_data)
+head(results)
+
+
+# add a column to the results table and save to result_final
+# some symbols are labelled NULL, substitute NULL to NA
+#symbol <- gsub("NULL", NA, miRtb_data$target_symbol)
+index <- match(rownames(results),miRtb_data$mature_mirna_acc)
+rows <- miRtb_data$mature_mirna_acc[index]
+
+
+matches <- miRtb_data.row(index)
+
+match(rownames(results),miRtb_data$mature_mirna_acc)
+
+head(symbol)
+result_final<-cbind(symbol, results)
+cbind.data.frame(results, symbol)
+cbind()
+
+upreg <- subset(result_final, result_final$logFC>0)
+up$symbol[1:5]
+downreg <- subset(result_final, result_final$logFC<0)
+down$symbol[1:5]
+
+# write results to csv files
+write.csv(result_final,file="DE_result.csv", quote=F)
+write.csv(upreg,file="upreg", quote=F)
+write.csv(downreg,file="downreg.csv", quote=F)
+```
+
+# References
+```{r}
+# Cite paper
+# Rovira-Llopis, S., Díaz-Rúa, R., Grau-Del Valle, C., Iannantuoni, F., Abad-Jimenez, Z., Bosch-Sierra, N., Panadero-Romero, J., Victor, V. M., Rocha, M., Morillas, C., & Bañuls, C. (2021). Characterization of Differentially Expressed Circulating miRNAs in Metabolically Healthy versus Unhealthy Obesity. Biomedicines, 9(3), 321. https://doi.org/10.3390/biomedicines9030321
+
+# Cite libraries
+bib <- c(citation("GEOquery"),
+         citation("pd.mirna.4.0"), 
+         citation("limma"), 
+         citation("preprocessCore"), 
+         citation("multiMiR"))
+
+print(bib) 
+```
+
+
