@@ -24,7 +24,6 @@ Contents:
     1. [Download Files]
 1. [Data processing]
 1. [Differential gene expression assessment with limma moderated t-statistics]
-1. 
 1. [References]
 
 
@@ -61,7 +60,6 @@ The dataset contains CEL files for each of 20 serum samples: 10 metabolically he
 
 CEL files contain non-coding RNA profiling data for the sample measured by Affymetrix Multispecies miRNA-4 Array.
 
-
 The sample IDs, classification (healthy/unhealthy), and miRNA IDs are provided in the supplemental information from Rovira et al.  were translated into a csv file to create a design matrix for the samples. 
 
 
@@ -73,7 +71,6 @@ setwd(working_dir)
 
 # Download CEL tar file from GEO database
 library(GEOquery)
-citation("GEOquery")
 getGEOSuppFiles("GSE169290")
 
 # Directory with tar
