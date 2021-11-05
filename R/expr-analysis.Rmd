@@ -17,8 +17,6 @@ The data used in this analysis is provided on GEO. Further description can be fo
 
 
 Contents:
-
-
 1. [Environment Setup]
     1. [Install Packages]
     1. [Download Files]
@@ -53,7 +51,6 @@ library(multiMiR)
 
 Download the raw CAL tar file from the GEO database.
 
-
 The dataset describing the samples collected by Rovira et al. is obtained from the CEL tar file provided for GEO Series GSE169290.
 
 The dataset contains CEL files for each of 20 serum samples: 10 metabolically healthy obese (MHO), 10 metabolically unhealthy obese (MUO). 
@@ -74,12 +71,13 @@ library(GEOquery)
 getGEOSuppFiles("GSE169290")
 
 # Directory with tar
-raw_dir <- paste(working_dir, "/GSE169290/", sep = "")
+cel_dir <- paste(working_dir, "/GSE169290/", sep = "")
+tarfile <- paste(cel_dir, "GSE169290_RAW.tar", sep = "")
+untar(tarfile, exdir = cel_dir)
 
-# Untar CEL files to the working directory
-untar(paste(raw_dir, "GSE169290_RAW.tar", sep = ""))
-untar("GSE169290_RAW.tar")
-
+# Untar CEL files to a directory
+#untar(paste(raw_dir, "GSE169290_RAW.tar", sep = ""))
+#untar("GSE169290_RAW.tar")
 ```
 
 
@@ -89,38 +87,109 @@ untar("GSE169290_RAW.tar")
 1. Normalization by quantiles
 ```{r}
 # Find CEL files in working directory
-cel_files <- list.files("./", pattern = "CEL")
+cel_files <- list.celfiles(cel_dir, listGzipped = TRUE)
 
-# Process CEL files and store raw data
-# Use package specific to Affymetrix miRNA-4 Array Platform used
-library(pd.mirna.4.0)
-raw_dat <- read.celfiles(cel_files, pkgname="pd.mirna.4.0")
+# Read csv with sample descriptions, add to phenotype data
+pdat <- read.csv("phenoData.csv", header = TRUE, row.names = 1)
 
-# Correct intensity backgrounds in raw data by RMA
-eset <- rma(raw_dat)
+# Store row names with sample IDs
+samplenames <- rownames(pdat)
 
-# Convert to an expression matrix
-expr<-exprs(eset)
+# Store groups as annotated data frame
+metadata <- data.frame(labelDescription="Sample group", row.names="group")
+phenodat <- new("AnnotatedDataFrame", data=pdat, varMetadata=metadata)
 
+# Create expression feature set
+featureset <- read.celfiles(cel_files, sampleNames = samplenames, phenoData = phenodat)
 
-# Normalize by quantiles
-library(preprocessCore)
-norm_expr <- normalize.quantiles(expr)
+# Correct intensity backgrounds by RMA + normalize by quantiles
+eset <- rma(featureset, background=TRUE, normalize=TRUE)
 
+# Exclude non-mature miRNAs
+# Non-mature accession numbers are 'MI0028437',
+# mature miRNA sequences are written thus 'MIMAT0033018'
+eset <- subset(eset, startsWith(row.names(eset), "MIMA"))
 
-feat_names <- Biobase::featureNames(eset)
+## Differential gene expression with limma moderated t-statistics
+library(limma)
 
-# Use miRNA IDs from expression dataset for column names
-colnames(norm_expr) <- gsub("_.*.CEL.gz","",colnames(eset))
+# Create design matrix from phenotype data
+design <- model.matrix(~0+factor(eset$group))
 
-# Preview
-print(head(norm_expr))
-
-# Rows are miRNAs (36353)
-# Columns are samples
+# Name groups in design matrix as MHO and MUO
+colnames(design) <- c("MHO","MUO")
 
 ```
 
+
+# Results with contrast 1
+```{r}
+
+# Create contrast matrix
+#contrast.matrix<-makeContrasts(MUO-MHO, levels=design)
+contrast.matrix<-makeContrasts(MHO-MUO, levels=design)
+
+fit <- contrasts.fit(lmFit(eset, design), contrasts = contrast.matrix)
+
+# Apply empirical Bayes method
+ebayes <- eBayes(fit)
+
+(results <- topTable(ebayes, n=1000, sort.by = "B"))
+
+# Lfc
+#(results <- topTable(ebayes, n=50000, sort.by = "B", lfc = 1))
+
+```
+
+
+# Sort by B
+```{r}
+# Summarize results
+(results <- topTable(ebayes, n=5000, sort.by = "T", p.value = 0.92))
+upreg <- subset(results, results$logFC>0)
+upreg[1:5,]
+```
+
+
+## Upregulated 
+```{r}
+# Query database for validated targets using miRNA ids
+library(multiMiR)
+
+upreg <- subset(results, results$logFC>0)
+
+# Remove ending in miRNA identifiers to match miRTarBase
+rownames(upreg) <- gsub("_st","",rownames(upreg))
+up_miRNAs <- rownames(upreg)
+up <- get_multimir(org = 'hsa', mirna = up_miRNAs, table = 'mirtarbase', summary = TRUE)
+updata <- up@data
+index <- match(rownames(upreg), updata$mature_mirna_acc)
+symbol <- as.character(updata$target_symbol[index])
+mirnaids <- as.character(updata$mature_mirna_id[index])
+upresult <- cbind(upreg, symbol, mirnaids)
+(upresult <- subset(upresult, !is.na(upresult$symbol)))
+
+#up <- get_multimir(org = 'hsa', mirna = up_miRNAs, table = 'targetscan', summary = TRUE)
+
+```
+
+## Downregulated
+```{r}
+
+downreg <- subset(results, results$logFC<0)
+
+# Remove ending in miRNA identifiers to match miRTarBase
+rownames(downreg) <- gsub("_st","",rownames(downreg))
+down_miRNAs <- rownames(downreg)
+down <- get_multimir(org = 'hsa', mirna = down_miRNAs, table = 'mirtarbase', summary = TRUE)
+downdata <- down@data
+index <- match(rownames(downreg), downdata$mature_mirna_acc)
+symbol <- as.character(downdata$target_symbol[index])
+downresult <- cbind(downreg, symbol)
+(downresult <- subset(downresult, !is.na(downresult$symbol)))
+
+```
+Notes on miRNA names
 
 ## Playing around
 ```{r}
@@ -155,35 +224,51 @@ chunk of code from resource:
 ## Differential gene expression with limma moderated t-statistics
 library(limma)
 
-# Read csv with sample descriptions
-sample_file <- read.csv(file="sample_descriptions.csv")
-samples <- as.data.frame(sample_file)
-
-# Get second row with healthy/unhealthy classifications for the sample columns
-groups <- samples[2,]
-
 # Create design matrix with healthy vs. unhealthy samples
-groups <- gsub("unhealthy","1",groups)
-groups <- gsub("healthy","0",groups)
-factor <- as.factor(groups)
-design <- model.matrix(~ 0+factor, data=factor)
-colnames(design)<-c("healthy","unhealthy")
+# convert expression data to a matrix
+design <- model.matrix(~0+factor(eset[["group"]] == "unhealthy"))
+fit <- lmFit(eset, design)
+ebayes <- eBayes(fit)
+topTable(ebayes, n=10, sort.by = "B")
+
+
+
+#groups <- gsub("unhealthy","1",groups)
+#groups <- gsub("healthy","0",groups)
+#factor <- as.factor(groups)
+#design <- model.matrix(~ 0+factor, data=factor)
+#colnames(design)<-c("healthy","unhealthy")
 
 # Create contrast matrix
 contrast.matrix<-makeContrasts(unhealthy-healthy, levels=design)
 
 # fit the expression data into a linear model
-fit <- lmFit(eset, design)
+fit <- lmFit(norm_expr, design)
+
+fit
+
+#fit <- lmFit(eset, design)
 fit <- contrasts.fit(fit, contrast.matrix)
 
 # Empirical Bayes to adjust variances, computes t-stat, std. error, logFC, log odd
-fit2 <- eBayes(fit)
+bayes_fit <- eBayes(fit)
 
 # toptable to summarize results
 # Used maximum number of genes
-results <- topTable(fit2, adjust="BH", number = 50000, sort.by = "B")
-# Preview 
-head(results)
+results <- topTable(bayes_fit, adjust="BH", number = 50000, sort.by = "B")
+
+
+upreg <- subset(results, results$logFC>0)
+downreg <- subset(results, results$logFC<0)
+
+# top 5 upregulated miRNA
+print(upreg[1:5, ])
+# top 5 downregulated miRNA
+print(downreg[1:5, ])
+
+# Remove ending in miRNA identifiers to match miRTarBase
+
+
 ```
 ### Upregulated genes
 - Rovira et al got 72 upregulated
@@ -260,6 +345,9 @@ Volcano plot
 *if none found, use TargetScanHuman*
 ```{r}
 # Remove ending in miRNA identifiers to match miRTarBase
+
+head(rownames(results))
+
 rownames(results) <- gsub("_st","",rownames(results))
 miRNAs <- rownames(results)
 
