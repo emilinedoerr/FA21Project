@@ -34,7 +34,7 @@ install.packages("BiocManager")
 install.packages("devtools")
 
 # Bioconductor library installs
-BiocManager::install(c("GEOquery","affy","oligo", "pd.mirna.4.0","multiMiR"))
+BiocManager::install(c("GEOquery","affy","oligo", "pd.mirna.4.0","multiMiR","mirbase.db","miRBaseConverter","pathview"))
 
 #all libraries
 library(BiocManager)
@@ -86,8 +86,12 @@ untar(tarfile, exdir = cel_dir)
 1. Correct intensity backgrounds by RMA
 1. Normalization by quantiles
 ```{r}
-# Find CEL files in working directory
-cel_files <- list.celfiles(cel_dir, listGzipped = TRUE)
+library(oligo)
+
+# Find CEL files in directory
+working.dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+cel.dir <- paste(working.dir, "/GSE169290/", sep = "")
+cel.files <- list.celfiles(listGzipped = TRUE)
 
 # Read csv with sample descriptions, add to phenotype data
 pdat <- read.csv("phenoData.csv", header = TRUE, row.names = 1)
@@ -100,15 +104,33 @@ metadata <- data.frame(labelDescription="Sample group", row.names="group")
 phenodat <- new("AnnotatedDataFrame", data=pdat, varMetadata=metadata)
 
 # Create expression feature set
-featureset <- read.celfiles(cel_files, sampleNames = samplenames, phenoData = phenodat)
+mirna.featureset <- read.celfiles(cel.files, sampleNames = samplenames, phenoData = phenodat)
 
 # Correct intensity backgrounds by RMA + normalize by quantiles
-eset <- rma(featureset, background=TRUE, normalize=TRUE)
+mirna.eset <- rma(mirna.featureset, background=TRUE, normalize=TRUE)
 
-# Exclude non-mature miRNAs
-# Non-mature accession numbers are 'MI0028437',
-# mature miRNA sequences are written thus 'MIMAT0033018'
-eset <- subset(eset, startsWith(row.names(eset), "MIMA"))
+```
+
+## Mapping MiRbase identifiers
+```{r}
+library(miRBaseConverter)
+
+featureNames(mirna.eset) <- gsub("_st","",featureNames(mirna.eset))
+mirna.acc <- #subset(featureNames(mirna.eset), startsWith(mirna.acc, "MIMA"))
+  featureNames(mirna.eset)
+
+# Convert Accession to ID
+acc2name <- miRNA_AccessionToName(mirna.acc)
+#featureNames(mirna.eset) <- acc2name$TargetName
+
+# Accessions that have id and are mature (contain miR)
+(mirna.map <- subset(acc2name, !is.na(acc2name$TargetName) 
+                    & grepl("hsa.*miR",acc2name$TargetName)))
+names.index <- match(mirna.map$Accession, mirna.acc)
+mirna.map$Accession == mirna.acc[names.index]
+mirna.map$Accession == featureNames(mirna.eset[names.index])
+filtered.eset <- mirna.eset[names.index]
+featureNames(filtered.eset) <- mirna.map$TargetName
 ```
 
 
@@ -117,25 +139,40 @@ eset <- subset(eset, startsWith(row.names(eset), "MIMA"))
 library(limma)
 
 # Create design matrix from phenotype data
-design <- model.matrix(~0+factor(eset$group))
+#design.matrix <- model.matrix(~0+factor(mirna.eset$group))
+design.matrix <- model.matrix(~0+factor(filtered.eset$group))
+
 
 # Name groups in design matrix as MHO and MUO
-colnames(design) <- c("MHO","MUO")
+colnames(design.matrix) <- c("MHO","MUO")
 
 # Switch to compare results
 #contrast.matrix<-makeContrasts(MUO-MHO, levels=design)
-contrast.matrix<-makeContrasts(MHO-MUO, levels=design)
+contrast.matrix<-makeContrasts(MHO-MUO, levels=design.matrix)
 
-fit <- contrasts.fit(lmFit(eset, design), contrasts = contrast.matrix)
+# Fit to linear model, apply empirical bayes
+#mirna.lmfit <- lmFit(mirna.eset, design.matrix)
+mirna.lmfit <- lmFit(filtered.eset, design.matrix)
+mirna.contr.fit <- contrasts.fit(mirna.lmfit, contrast.matrix)
+mirna.fit <- eBayes(mirna.contr.fit)
 
-# Apply empirical Bayes method
-ebayes <- eBayes(fit)
+dim(mirna.fit)
 
+# Extract differentially expressed miRNAs with topTable
+mirna.diff.expr <- topTable(mirna.fit, coef=1, adjust.method = "none", n=mirna.n, p.value = 0.05, sort.by = "p")
+dim(mirna.diff.expr)
 
-########## TODO
-# Need to extract differentially expressed miRNAs - topTable is for genes
+# Show number of miRNA
+head(mirna.diff.expr)
 
 ```
+
+### Volcano plot (Figure 1)
+```{r}
+volcanoplot(mirna.fit, coef=1)
+```
+
+
 
 ## Find validated target genes with miRTarBase
 - Query database for validated targets using miRNA ids
@@ -146,41 +183,62 @@ ebayes <- eBayes(fit)
 library(multiMiR)
 
 # Differentially expressed miRNAs with positive log2 fold change
-upreg <- subset(results, results$logFC>0)
+mirna.pos <- subset(mirna.diff.expr, mirna.diff.expr$logFC>0)
+mirna.pos.query <- get_multimir(org = 'hsa', mirna = rownames(mirna.pos), table = 'mirtarbase', predicted.cutoff.type = "p")
+mirna.pos.data <- mirna.pos.query@data
 
-# Remove ending in miRNA identifiers to match miRTarBase
-rownames(upreg) <- gsub("_st","",rownames(upreg))
-up_miRNAs <- rownames(upreg)
-up <- get_multimir(org = 'hsa', mirna = up_miRNAs, table = 'mirtarbase', summary = TRUE)
-updata <- up@data
-index <- match(rownames(upreg), updata$mature_mirna_acc)
-symbol <- as.character(updata$target_symbol[index])
-mirnaids <- as.character(updata$mature_mirna_id[index])
-upresult <- cbind(upreg, symbol, mirnaids)
-upresult <- subset(upresult, !is.na(upresult$symbol))
+# Map miRNA ids to results
+index <- match(rownames(mirna.pos), mirna.pos.data$mature_mirna_id)
+upreg.targets <- mirna.pos.data[index,]
 
-#up <- get_multimir(org = 'hsa', mirna = up_miRNAs, table = 'targetscan', summary = TRUE)
+# Generate table with results
+mirna.upreg <- as.data.frame(
+  cbind(upreg.targets$mature_mirna_id,
+        upreg.targets$target_symbol,
+        mirna.pos$logFC,
+        mirna.pos$P.Value))
+colnames(mirna.upreg) <- c("Name","Target Gene","Fold Change","p-value")
+
+# Validate results
+#expected <- cbind(mirna.pos.query@data$target_symbol[index], mirna.pos.query@data$mature_mirna_id[index])
+#result <- cbind(mirna.upreg$symbols, mirna.upreg$names)
+#all(expected == result)
+
+# Print top 5
+mirna.upreg[1:5,]
 
 ```
-
 
 ### Downregulated genes
 ```{r}
 # Differentially expressed miRNA with negative log2 fold change
-downreg <- subset(results, results$logFC<0)
+mirna.neg <- subset(mirna.diff.expr, mirna.diff.expr$logFC<0)
+mirna.neg.query <- get_multimir(org = 'hsa', mirna = rownames(mirna.neg), table = 'mirtarbase', predicted.cutoff.type = "p")
+mirna.neg.data <- mirna.neg.query@data
 
-# Remove ending in miRNA identifiers to match miRTarBase
-rownames(downreg) <- gsub("_st","",rownames(downreg))
-down_miRNAs <- rownames(downreg)
-down <- get_multimir(org = 'hsa', mirna = down_miRNAs, table = 'mirtarbase', summary = TRUE)
-downdata <- down@data
-index <- match(rownames(downreg), downdata$mature_mirna_acc)
-symbol <- as.character(downdata$target_symbol[index])
-downresult <- cbind(downreg, symbol)
-downresult <- subset(downresult, !is.na(downresult$symbol))
+# Map miRNA ids to results
+index <- match(rownames(mirna.neg), mirna.neg.data$mature_mirna_id)
+downreg.targets <- mirna.neg.data[index,]
+#cbind(downreg.targets, mirna.neg)
+
+
+# Generate table with results
+mirna.downreg <- as.data.frame(
+  cbind(downreg.targets$mature_mirna_id,
+        downreg.targets$target_symbol,
+        mirna.neg$logFC,
+        mirna.neg$P.Value))
+colnames(mirna.downreg) <- c("Name","Target Gene","Fold Change","p-value")
+
+# Validate results
+#expected <- cbind(mirna.neg.query@data$target_symbol[index], mirna.neg.query@data$mature_mirna_id[index])
+#result <- cbind(mirna.upreg$symbols, rownames(mirna.upreg))
+#expected == result
+
+# Print top 5
+mirna.downreg[1:5,]
 
 ```
-
 
 
 ## miRNA target prediction and KEGG pathway analysis
@@ -190,6 +248,33 @@ downresult <- subset(downresult, !is.na(downresult$symbol))
 ## Pathway enrichment
 - differential miRNAs in MUO vs MHO manually assigned to biological processes
 ```{r}
+library(pathview)
+upreg.targets$target_entrez
+downreg.targets$target_entrez
+
+
+# assign entrez ids to pvalues
+p.values <- mirna.downreg$`p-value`
+names(p.values) <- downreg.targets$target_entrez
+
+# remove entries with no entrez ids
+pv.out <- pathview(gene.data = -log10(p.values), 
+                   #pathway.id = "05200", 
+                   species = "hsa", 
+                   out.suffix = "kegg_pathway_down")
+
+#### up-reg #### 
+p.values <- up$P.Value
+
+# assign entrez ids to pvalues
+names(p.values) <- upsymbol2eg[,2]
+
+# remove entries with no entrez ids
+p.values <- p.values[!is.na(names(p.values))]
+pv.out <- pathview(gene.data = -log10(p.values), pathway.id = "05200", species = "hsa", out.suffix = "kegg_pathway_up", res = 300)
+
+
+
 ```
 
 
@@ -206,29 +291,6 @@ downresult <- subset(downresult, !is.na(downresult$symbol))
 # t-statistic for each gene with p-value
 ```
 
-### Differential expression results
-- Rovira et al got 72 upregulated, 87 downregulated
-```{r}
-cbind("Number of differentially expressed miRNAs", length(rownames(results)))
-cbind("Number of upregulated miRNAs", length(up_miRNAs))
-cbind("Number of downregulated miRNAs", length)
-print(length(rownames(upresult)))
-```
-
-
-### Volcano plot (Figure 1)
-*TODO*
-[resource](https://biocorecrg.github.io/CRG_RIntroduction/volcano-plots.html)
-```{r}
-
-```
-
-### Top 5 up and downregulated in MUO vs MHO (Table 2)
-- including t-statistic for each gene with p-value
-```{r}
-print(upresult[1:5,])
-print(downresult[1:5,])
-```
 
 ### Heatmap (Figure 2)
 ```{r}
