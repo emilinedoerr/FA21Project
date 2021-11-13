@@ -34,7 +34,7 @@ install.packages("BiocManager")
 install.packages("devtools")
 
 # Bioconductor library installs
-BiocManager::install(c("GEOquery","affy","oligo", "pd.mirna.4.0","multiMiR","mirbase.db","miRBaseConverter","pathview"))
+BiocManager::install(c("GEOquery","affy","oligo", "pd.mirna.4.0","multiMiR","mirbase.db","miRBaseConverter","pathway"))
 
 #all libraries
 library(BiocManager)
@@ -156,10 +156,8 @@ mirna.lmfit <- lmFit(filtered.eset, design.matrix)
 mirna.contr.fit <- contrasts.fit(mirna.lmfit, contrast.matrix)
 mirna.fit <- eBayes(mirna.contr.fit)
 
-dim(mirna.fit)
-
 # Extract differentially expressed miRNAs with topTable
-mirna.diff.expr <- topTable(mirna.fit, coef=1, adjust.method = "none", n=mirna.n, p.value = 0.05, sort.by = "p")
+mirna.diff.expr <- topTable(mirna.fit, coef=1, adjust.method = "none", n=5000, p.value = 0.05, sort.by = "p")
 dim(mirna.diff.expr)
 
 # Show number of miRNA
@@ -240,10 +238,72 @@ mirna.downreg[1:5,]
 
 ```
 
+# Biological Pathway Assignment
+```{r}
+BiocManager::install(c("ontologyIndex", "ontologySimilarity"))
+install.packages("paintmap")
+library(ontologyIndex)
+library(ontologySimilarity)
+library(paintmap)
+data(go)
+data(gene_GO_terms)
+data(GO_IC)
+
+all_upreg.go.terms <- gene_GO_terms[upreg.targets$target_symbol]
+all_upreg.go.terms <- all_upreg.go.terms[all_upreg.go.terms%in%gene_GO_terms]
+
+top_upreg.go.terms <- gene_GO_terms[mirna.upreg$`Target Gene`[1:5]]
+top_upreg.go.terms <- top_upreg.go.terms[top_upreg.go.terms%in%gene_GO_terms]
+
+terms <- top_upreg.go.terms
+cc <- go$id[go$name == "cellular_component"]
+terms_cc <- lapply(terms, function(x) intersection_with_descendants(go, roots=cc, x)) 
+data.frame(check.names=FALSE, `#terms`=sapply(terms, length), `#CC terms`=sapply(terms_cc, length))
+sim_matrix <- get_sim_grid(
+    ontology=go, 
+    information_content=GO_IC,
+    term_sets=terms)
+
+
+paintmap(colour_matrix(sim_matrix))
+```
+
+
+# GO example
+```{r}
+BiocManager::install(c("ontologyIndex", "ontologySimilarity"))
+install.packages("paintmap")
+library(ontologyIndex)
+library(ontologySimilarity)
+library(paintmap)
+data(go)
+data(gene_GO_terms)
+data(GO_IC)
+
+gene_GO_terms
+
+beach <- gene_GO_terms[c("LRBA", "LYST", "NBEA", "NBEAL1", "NBEAL2", "NSMAF", "WDFY3", "WDFY4", "WDR81")]
+cc <- go$id[go$name == "cellular_component"]
+beach_cc <- lapply(beach, function(x) intersection_with_descendants(go, roots=cc, x)) 
+data.frame(check.names=FALSE, `#terms`=sapply(beach, length), `#CC terms`=sapply(beach_cc, length))
+sim_matrix <- get_sim_grid(
+    ontology=go, 
+    information_content=GO_IC,
+    term_sets=beach)
+
+paintmap(colour_matrix(sim_matrix))
+```
+
+### Heatmap (Figure 2)
+```{r}
+heatmap(exprs(mirna.eset))
+```
 
 ## miRNA target prediction and KEGG pathway analysis
 - used miRBD database
 - target score > 80
+
+
 
 ## Pathway enrichment
 - differential miRNAs in MUO vs MHO manually assigned to biological processes
@@ -254,47 +314,92 @@ downreg.targets$target_entrez
 
 
 # assign entrez ids to pvalues
-p.values <- mirna.downreg$`p-value`
+p.values <- as.numeric(mirna.downreg$`p-value`)
 names(p.values) <- downreg.targets$target_entrez
 
 # remove entries with no entrez ids
 pv.out <- pathview(gene.data = -log10(p.values), 
-                   #pathway.id = "05200", 
+                   pathway.id = "05200", 
                    species = "hsa", 
                    out.suffix = "kegg_pathway_down")
 
-#### up-reg #### 
-p.values <- up$P.Value
-
-# assign entrez ids to pvalues
-names(p.values) <- upsymbol2eg[,2]
-
-# remove entries with no entrez ids
-p.values <- p.values[!is.na(names(p.values))]
-pv.out <- pathview(gene.data = -log10(p.values), pathway.id = "05200", species = "hsa", out.suffix = "kegg_pathway_up", res = 300)
+install.packages("ClustVis")
 
 
-
+# Perform gene ontology cellular component enrichment for down-regulated genes
+# There will be two output files with prefix 'downSigTermCC', two with prefix 'downSigTermBP'
+sigDownTermCC <- GOFunction(entrez_down,entrez_all,organism="org.Hs.eg.db",
+                          ontology="CC",fdrmethod="BY",bmpSize = 4000,
+                          filename="downSigTermCC",fdrth=0.1)
+# Perform gene ontology biological process enrichment for down-regulated genes
+sigTerm <- GOFunction(entrez_down,entrez_all,organism="org.Hs.eg.db",
+                      ontology="BP",fdrmethod="BH",filename="downSigTermBP",
+                      fdrth=0.1,bmpSize = 4000)
 ```
 
+# KEGG Pathway analysis - not working
+```{r}
+library(pathview)
+silico.target.data$target_entrez
+silico.target.data$target_ensembl
 
+
+options(connectionObserver = NULL)
+
+p.values <- as.numeric(silico.target.data$score)
+names(p.values) <- silico.target.data$target_ensembl
+
+p.values <- p.values[!is.na(names(p.values))]
+
+
+
+pathview(gene.data = -log10(p.values), 
+         gne.idtype = "ENSEMBL",
+         species = "hsa", 
+         pathway.id = silico.target.data$target_entrez, 
+         out.suffix = "kegg_pathway_up")
+
+# assign entrez ids to pvalues
+p.values <- as.numeric(mirna.downreg$`p-value`)
+names(p.values) <- downreg.targets$target_entrez
+
+# remove entries with no entrez ids
+pv.out <- pathview(gene.data = -log10(p.values), 
+                   pathway.id = "05200", 
+                   species = "hsa", 
+                   out.suffix = "kegg_pathway_down")
+
+install.packages("ClustVis")
+data(gene.idtype.list)
+gene.idtype.list
+```
+
+# In silico target prediction
 ## Target gene analysis with miRDB
 - total of 4389 affected genes for top 10 upregulated miRNAs
 - selected target genes with target score > 80
 - remove duplicated and triplicates
 - KEGG pathway analysis on 1.104 predicted target genes
 - predicted gene targets signif. enriched for 53 terms
-
-
-## Results
 ```{r}
-# t-statistic for each gene with p-value
+
+# Top 10 upregulated miRNAs
+top.upreg.mirnas <- mirna.pos[1:10,]
+
+silico.targets <- get_multimir(mirna = rownames(top.upreg.mirnas), org = "hsa", predicted.cutoff = 80, table="mirdb")
+silico.target.data <- as.data.frame(silico.targets@data)
+dim(silico.target.data) # Number of affected genes
+# remove duplicates and triplicates
+silico.target.data <- subset(silico.target.data, !duplicated(silico.target.data$target_symbol))
+dim(silico.target.data)
+silico.target.data <- subset(silico.target.data, !duplicated(silico.target.data$target_symbol))
+dim(silico.target.data)
+
 ```
 
 
-### Heatmap (Figure 2)
-```{r}
-```
+
+
 
 ### (Figure 3)
 
