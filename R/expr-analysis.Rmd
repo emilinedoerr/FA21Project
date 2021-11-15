@@ -34,17 +34,7 @@ Set global variables, install packages, download resource files.
 The dataset describing the samples collected by Rovira et al. is obtained from the CEL tar file provided for GEO Series GSE169290.
 - contains 20 CEL files with non-coding RNA profiling data measured by Affymetrix Multispecies miRNA-4 Array.
 - 20 serum samples: 10 metabolically healthy obese (MHO), 10 metabolically unhealthy obese (MUO). 
-- The sample IDs, classification (healthy/unhealthy), and miRNA IDs are provided in the supplemental information from Rovira et al. and translated into a csv file to create a design matrix for the samples. 
 
-```{r setup, echo=FALSE}
-# Global variables
-# Working directory
-knitr::opts_knit$set(root.dir = rstudioapi::getActiveDocumentContext()$path)
-
-# Directory with resource files
-resources.dir <- "./resources"
-data.dir <- "./resources/dataset"
-```
 ```{r installs, message=FALSE, warning=TRUE, include=FALSE}
 # Install packages
 install.packages("BiocManager")
@@ -54,6 +44,7 @@ install.packages("devtools")
 BiocManager::install(c("GEOquery","affy","oligo", "pd.mirna.4.0","multiMiR",
                        "mirbase.db","miRBaseConverter","pathway"))
 ```
+
 ```{r downloads, include=FALSE}
 ### Download Files 
 library(GEOquery)
@@ -142,23 +133,24 @@ head(mirna.diff.expr)
 
 ```
 
-```{r volcanoplot}
-volcanoplot(mirna.fit, coef=1)
+```{r volcanoplot, echo=FALSE, message=TRUE, paged.print=TRUE}
+print(volcanoplot(mirna.fit, coef=1))
 ```
 
 ```{r heatmap}
-expr <- t(exprs(mature.eset))
-rownames(expr) <- paste(gsub("serum_","",mature.eset$source_name_ch1),
-                        gsub("CB","",mature.eset$title),
+expr <- t(exprs(mirna.eset))
+rownames(expr) <- paste(gsub("serum_","",mirna.eset$source_name_ch1),
+                        gsub("CB","",mirna.eset$title),
                         sep="")
 
-install.packages("pheatmap")
-library("pheatmap")
+#install.packages("pheatmap")
+library(pheatmap)
 
-annotation <- pData(mature.eset)["group:ch1"]
-rownames(annotation) <- labels
+annotation <- pData(mirna.eset)["group:ch1"]
+rownames(annotation) <- rownames(expr)
 
-pheatmap(expr, scale="row", cluster_rows=TRUE, cutree_rows = 2, annotation_row = annotation)
+pheatmap(expr, scale="row", cluster_rows=TRUE, cutree_rows = 2, 
+         annotation_row = annotation)
 
 ```
 
@@ -185,12 +177,7 @@ mirna.upreg <- as.data.frame(
         upreg.targets$target_symbol,
         mirna.up$logFC,
         mirna.up$P.Value))
-colnames(mirna.upreg) <- c("Name","Target Gene","Fold Change","p-value")
-
-# Validate results
-#expected <- cbind(mirna.pos.query@data$target_symbol[index], mirna.pos.query@data$mature_mirna_id[index])
-#result <- cbind(mirna.upreg$symbols, mirna.upreg$names)
-#all(expected == result)
+colnames(mirna.upreg) <- c("Name","Target Gene","Log Fold Change","p-value")
 
 # Print top 5
 mirna.upreg[1:5,]
@@ -216,7 +203,7 @@ mirna.downreg <- as.data.frame(
         downreg.targets$target_symbol,
         mirna.down$logFC,
         mirna.down$P.Value))
-colnames(mirna.downreg) <- c("Name","Target Gene","Fold Change","p-value")
+colnames(mirna.downreg) <- c("Name","Target Gene","Log Fold Change","p-value")
 
 # Validate results
 #expected <- cbind(mirna.down.query@data$target_symbol[index], mirna.down.query@data$mature_mirna_id[index])
@@ -229,8 +216,8 @@ mirna.downreg[1:5,]
 
 ### Biological Pathway Assignment
 ```{r}
-BiocManager::install(c("ontologyIndex", "ontologySimilarity"))
-install.packages("paintmap")
+#BiocManager::install(c("ontologyIndex", "ontologySimilarity"))
+#install.packages("paintmap")
 library(ontologyIndex)
 library(ontologySimilarity)
 library(paintmap)
