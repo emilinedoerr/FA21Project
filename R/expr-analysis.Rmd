@@ -68,6 +68,7 @@ mirna.eset <- geo.data$GSE169290_series_matrix.txt.gz
 
 ## Microarray Analysis
 ### Differential expression of miRNAs 
+- TODO! Doesnt match up
 ```{r diffexpr, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
 library(limma)
 
@@ -108,30 +109,55 @@ dim(mirna.diff.expr)
 ```
 
 #### Volcano Plot
+- TODO doesnt match up
 ```{r diffexprresults}
 volcanoplot(mirna.fit)
 ```
 
 #### Heatmap
+TODO!! Make it correct, doesnt match up
+- 156 columns, 20 rows
 ```{r heatmap}
-expr <- t(exprs(mirna.eset))
-rownames(expr) <- paste(gsub("serum_","",mirna.eset$source_name_ch1),
-                        gsub("CB","",mirna.eset$title),
-                        sep="")
-
-#install.packages("pheatmap")
 library(pheatmap)
 
-annotation <- pData(mirna.eset)["group:ch1"]
-rownames(annotation) <- rownames(expr)
+# Use only significant miRNAs
+mirna.eset.2 <- mirna.eset[mirna.diff.expr$ID]
+expr <- t(exprs(mirna.eset.2))
 
-# TODO - fix this
-pheatmap(expr, scale="row", cluster_rows=TRUE, cutree_rows = 2, 
-         annotation_row = annotation)
+# Isolate groups and rejoin
+muo.group <- mirna.eset.2[,mirna.eset.2$source_name_ch1 == "serum_MUO"]
+expr.muo <- t(exprs(muo.group))
+rownames(expr.muo) <- gsub("CB", "MUO", muo.group$title)
+
+mho.group <- mirna.eset.2[,mirna.eset.2$source_name_ch1 == "serum_MHO"]
+expr.mho <- t(exprs(mho.group))
+rownames(expr.mho) <- gsub("CB", "MHO", mho.group$title)
+
+expr.by.groups <- rbind(expr.muo, expr.mho)
+
+
+# Heatmap - method 1
+pheatmap(expr.by.groups, cutree_rows = 2, 
+         clustering_distance_rows = "correlation")
+
+# Heatmap method 2 - use annotation row
+# Not sure how to cluster within groups
+
+# Make annotation data for heatmap
+annotation <- pData(mirna.eset.2)["group:ch1"]
+rownames(annotation) <- rownames(expr.by.groups)
+
+pheatmap(expr.by.groups, 
+         scale="none",
+         annotation_row = annotation,
+         #gaps_row = 5, 
+         fontsize_col = 2)
 
 ```
 
 ### Find validated target genes
+- TODO! Doesnt match up
+
 - Query database for validated targets using miRNA ids
 - Show top 5 up and down-regulated miRNAs with predicted gene targets
 ```{r upreg}
@@ -191,6 +217,7 @@ mirna.downreg[1:5,]
 ```
 
 ### Biological Pathway Assignment
+- TODO! Finish generating results
 ```{r}
 #BiocManager::install(c("ontologyIndex", "ontologySimilarity"))
 #install.packages("paintmap")
@@ -232,6 +259,8 @@ sim_matrix <- get_sim_grid(
 - remove duplicated and triplicates
 - KEGG pathway analysis on 1.104 predicted target genes
 - predicted gene targets signif. enriched for 53 terms
+
+- TODO! ...a lot
 ```{r}
 # Top 10 upregulated miRNAs
 top.upreg.mirnas <- mirna.up[1:10,]
@@ -281,6 +310,16 @@ pv.out <- pathview(gene.data = -log10(p.values),
                    pathway.id = silico.target.data$target_entrez,
                    species = "hsa", 
                    out.suffix = "kegg_pathway")
+```
+
+#### Results
+
+
+Top 40 biological processes + pathways associated with up- and down-regulated miRNAs in MUO individuals
+```{r}
+```
+Upregulated GO/pathway terms specific for target genes 
+```{r}
 ```
 
 # References
