@@ -5,22 +5,25 @@ date: "`r Sys.Date()`"
 output: html_notebook
 ---
 
+### Abstract
 This analysis was done for a project which looked at the reproducibility of 
 bioinformatics methods used in obesity and metabolic health studies.
 
-The study reproduced in this analysis was performed by Rovira et al. Authors applied microarray analysis, miRNA target prediction, pathway enrichment analysis, and statistical analysis to serum miRNAs which they collected from 10 MHO and 10 MUO individuals. 
+The study reproduced in this analysis was performed by Rovira et al. Authors applied microarray analysis, miRNA target prediction, pathway enrichment analysis, and statistical analysis to investigate metabolic health and obesity.
 
-The data used in this analysis is provided on GEO. Further description can be found under the data import section below.
+### Dataset
+The dataset describing the samples collected by Rovira et al. is obtained from the CEL tar file provided for GEO Series GSE169290.
+- contains 20 CEL files with non-coding RNA profiling data measured by Affymetrix Multispecies miRNA-4 Array.
+- 20 serum samples: 10 metabolically healthy obese (MHO), 10 metabolically unhealthy obese (MUO).
 
 
-Contents:
+### Contents
 
+1. [Dataset]
 1. [Analysis]
     1. [Environment Setup]
-    1. [Data processing]
     1. [Microarray Analysis]
-        1. [Mapping miRBase identifiers]
-        1. [Differential miRNA expression analysis]
+        1. [Differential expression of miRNAs]
         1. [Find validated target genes]
     1. [Pathway enrichment]
     1. [In silico target prediction]
@@ -29,13 +32,17 @@ Contents:
 # Analysis
 ## Environment setup
 Set global variables, install packages, download resource files.
+```{r setup}
+# Set directories globally
+knitr::opts_knit$set(root.dir = '.',
+                     resources.dir <- "./resources",
+                     data.dir <- "./resources/dataset",
+                     results.dir <- "./resources/results")
+```
 
-### Dataset
-The dataset describing the samples collected by Rovira et al. is obtained from the CEL tar file provided for GEO Series GSE169290.
-- contains 20 CEL files with non-coding RNA profiling data measured by Affymetrix Multispecies miRNA-4 Array.
-- 20 serum samples: 10 metabolically healthy obese (MHO), 10 metabolically unhealthy obese (MUO). 
+```{r installs, eval=FALSE, message=FALSE, warning=TRUE, include=FALSE}
+# Skip by default: set include=TRUE to run chunk if needed.
 
-```{r installs, message=FALSE, warning=TRUE, include=FALSE}
 # Install packages
 install.packages("BiocManager")
 install.packages("devtools")
@@ -45,56 +52,28 @@ BiocManager::install(c("GEOquery","affy","oligo", "pd.mirna.4.0","multiMiR",
                        "mirbase.db","miRBaseConverter","pathway"))
 ```
 
-```{r downloads, include=FALSE}
-### Download Files 
+Get data from GEO with GEOquery package
+```{r downloads}
 library(GEOquery)
-
-# Working directory
-knitr::opts_knit$set(root.dir = rstudioapi::getActiveDocumentContext()$path)
-
-# Directory with resource files
-resources.dir <- "./resources"
-data.dir <- "./resources/dataset"
 
 # GEO accession for the dataset
 geo.acc <- "GSE169290"
 
 # Download resources from GEO database
 geo.data <- getGEO(GEO = geo.acc, destdir = data.dir, GSEMatrix = TRUE) 
-#Retrieve matrix data and store it in R object
-# Already normalized
+# Retrieve matrix data and store it in R object
+# Data already pre-processed
 mirna.eset <- geo.data$GSE169290_series_matrix.txt.gz
 ```
 
 ## Microarray Analysis
-### Mapping MiRbase identifiers
-```{r mapids}
-library(miRBaseConverter)
-
-featureNames(mirna.eset) <- gsub("_st","",featureNames(mirna.eset))
-mirna.acc <- #subset(featureNames(mirna.eset), startsWith(mirna.acc, "MIMA"))
-  featureNames(mirna.eset)
-
-# Convert Accession to ID
-acc2name <- miRNA_AccessionToName(mirna.acc)
-#featureNames(mirna.eset) <- acc2name$TargetName
-
-# Accessions that have id and are mature (contain miR)
-(mirna.map <- subset(acc2name, !is.na(acc2name$TargetName) 
-                    & grepl("hsa.*miR",acc2name$TargetName)))
-names.index <- match(mirna.map$Accession, mirna.acc)
-filtered.eset <- mirna.eset[names.index]
-featureNames(filtered.eset) <- mirna.map$TargetName
-```
-
-### Differential miRNA expression analysis
-```{r diffexpr}
+### Differential expression of miRNAs 
+```{r diffexpr, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
 library(limma)
 
 # Filter out non-mature miRNAs (accession does not start with MIMA)
-acc <- mirna.eset@featureData@data$Accession
-mirna.eset <- subset(mirna.eset, grepl("MIMA*", acc))
-
+mirna.eset <- subset(mirna.eset, grepl("MIMA*", 
+                                       mirna.eset@featureData@data$Accession))
 
 # Create design matrix from phenotype data
 design.matrix <- model.matrix(~0+factor(mirna.eset$`group:ch1`))
@@ -102,11 +81,10 @@ design.matrix <- model.matrix(~0+factor(mirna.eset$`group:ch1`))
 # Name groups in design matrix as MHO and MUO
 colnames(design.matrix) <- c("MHO","MUO")
 
+
 # Switch to compare results
 #contrast.matrix<-makeContrasts(MUO-MHO, levels=design)
 contrast.matrix<-makeContrasts(MHO-MUO, levels=design.matrix)
-
-
 expr <- exprs(mirna.eset)
 
 # Fit to linear model, apply empirical bayes
@@ -115,28 +93,26 @@ mirna.lmfit <- lmFit(mirna.eset, design.matrix)
 mirna.contr.fit <- contrasts.fit(mirna.lmfit, contrast.matrix)
 mirna.fit <- eBayes(mirna.contr.fit)
 
-
 # Extract differentially expressed miRNAs with topTable
 n.features <- dim(mirna.eset)['Features']
+
+# TODO - get correct number of diff expressed
 mirna.diff.expr <- topTable(mirna.fit, 
                             coef=1, 
                             adjust.method = "none", 
-                            p.value = 0.1, 
+                            p.value = 0.5, 
                             n=n.features,
-                            #sort.by = "p",
-                            confint=TRUE
-                            )
-
+                            sort.by = "p")
 # Show number of miRNA
 dim(mirna.diff.expr)
-head(mirna.diff.expr)
-
 ```
 
-```{r volcanoplot, echo=FALSE, message=TRUE, paged.print=TRUE}
-print(volcanoplot(mirna.fit, coef=1))
+#### Volcano Plot
+```{r diffexprresults}
+volcanoplot(mirna.fit)
 ```
 
+#### Heatmap
 ```{r heatmap}
 expr <- t(exprs(mirna.eset))
 rownames(expr) <- paste(gsub("serum_","",mirna.eset$source_name_ch1),
@@ -149,6 +125,7 @@ library(pheatmap)
 annotation <- pData(mirna.eset)["group:ch1"]
 rownames(annotation) <- rownames(expr)
 
+# TODO - fix this
 pheatmap(expr, scale="row", cluster_rows=TRUE, cutree_rows = 2, 
          annotation_row = annotation)
 
@@ -179,9 +156,8 @@ mirna.upreg <- as.data.frame(
         mirna.up$P.Value))
 colnames(mirna.upreg) <- c("Name","Target Gene","Log Fold Change","p-value")
 
-# Print top 5
+# Show top 5
 mirna.upreg[1:5,]
-
 ```
 
 ```{r downreg}
@@ -228,9 +204,11 @@ data(GO_IC)
 all_upreg.go.terms <- gene_GO_terms[upreg.targets$target_symbol]
 all_upreg.go.terms <- all_upreg.go.terms[all_upreg.go.terms%in%gene_GO_terms]
 
+# Top 5
 top_upreg.go.terms <- gene_GO_terms[mirna.upreg$`Target Gene`[1:5]]
 top_upreg.go.terms <- top_upreg.go.terms[top_upreg.go.terms%in%gene_GO_terms]
 
+# Just do top 5 for now
 terms <- top_upreg.go.terms
 cc <- go$id[go$name == "cellular_component"]
 terms_cc <- 
@@ -242,8 +220,7 @@ sim_matrix <- get_sim_grid(
     information_content=GO_IC,
     term_sets=terms)
 
-
-
+# TODO - find the output
 ```
 
 
@@ -259,11 +236,13 @@ sim_matrix <- get_sim_grid(
 # Top 10 upregulated miRNAs
 top.upreg.mirnas <- mirna.up[1:10,]
 
+# Search miRDB
 silico.targets <- get_multimir(mirna = top.upreg.mirnas$miRNA_ID, 
                                org = "hsa", predicted.cutoff = 80, 
                                table="mirdb")
 silico.target.data <- as.data.frame(silico.targets@data)
 dim(silico.target.data) # Number of affected genes
+
 # remove duplicates and triplicates
 silico.target.data <- subset(silico.target.data, 
                              !duplicated(silico.target.data$target_symbol))
@@ -272,26 +251,21 @@ silico.target.data <- subset(silico.target.data,
                              !duplicated(silico.target.data$target_symbol))
 dim(silico.target.data)
 
-
-
+# TODO - keep going here.
 ```
 
 ### KEGG Pathway analysis - not working
 ```{r}
 library(pathview)
-silico.target.data$target_entrez
-silico.target.data$target_ensembl
-
-
-options(connectionObserver = NULL)
+# May or may not need
+#options(connectionObserver = NULL)
 
 p.values <- as.numeric(silico.target.data$score)
 names(p.values) <- silico.target.data$target_ensembl
 
 p.values <- p.values[!is.na(names(p.values))]
 
-
-
+# Fails here
 pathview(gene.data = -log10(p.values), 
          gne.idtype = "ENSEMBL",
          species = "hsa", 
@@ -304,13 +278,9 @@ names(p.values) <- downreg.targets$target_entrez
 
 # remove entries with no entrez ids
 pv.out <- pathview(gene.data = -log10(p.values), 
-                   pathway.id = "05200", 
+                   pathway.id = silico.target.data$target_entrez,
                    species = "hsa", 
-                   out.suffix = "kegg_pathway_down")
-
-install.packages("ClustVis")
-data(gene.idtype.list)
-gene.idtype.list
+                   out.suffix = "kegg_pathway")
 ```
 
 # References
@@ -319,10 +289,6 @@ gene.idtype.list
 # Rovira-Llopis, S., Díaz-Rúa, R., Grau-Del Valle, C., Iannantuoni, F., Abad-Jimenez, Z., Bosch-Sierra, N., Panadero-Romero, J., Victor, V. M., Rocha, M., Morillas, C., & Bañuls, C. (2021). Characterization of Differentially Expressed Circulating miRNAs in Metabolically Healthy versus Unhealthy Obesity. Biomedicines, 9(3), 321. https://doi.org/10.3390/biomedicines9030321
 
 # Cite libraries
-bib <- c(citation("GEOquery"),
-         citation("pd.mirna.4.0"), 
-         citation("limma"), 
-         citation("preprocessCore"), 
-         citation("multiMiR"))
-print(bib)
+knitr::write_bib(x=.packages())
+
 ```
