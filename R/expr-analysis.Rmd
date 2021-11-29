@@ -61,9 +61,26 @@ geo.acc <- "GSE169290"
 
 # Download resources from GEO database
 geo.data <- getGEO(GEO = geo.acc, destdir = data.dir, GSEMatrix = TRUE) 
-# Retrieve matrix data and store it in R object
-# Data already pre-processed
-mirna.eset <- geo.data$GSE169290_series_matrix.txt.gz
+
+# Retrieve matrix data and store it in R object, echo summary
+(mirna.eset <- geo.data$GSE169290_series_matrix.txt.gz)
+
+# Experiment data
+experimentData(mirna.eset)
+
+# Phenotype data
+phenoData(mirna.eset)
+varLabels(mirna.eset)
+
+# Feature data
+featureData(mirna.eset)
+varMetadata(mirna.eset)
+
+# Data processing info
+mirna.eset$data_processing[1]
+
+# Group labels
+mirna.eset$`group:ch1`
 ```
 
 ## Microarray Analysis
@@ -73,8 +90,9 @@ mirna.eset <- geo.data$GSE169290_series_matrix.txt.gz
 library(limma)
 
 # Filter out non-mature miRNAs (accession does not start with MIMA)
-mirna.eset <- subset(mirna.eset, grepl("MIMA*", 
-                                       mirna.eset@featureData@data$Accession))
+#mirna.eset <- subset(mirna.eset, grepl("MIMA*", 
+#                                       mirna.eset@featureData@data$Accession))
+#dim(mirna.eset)
 
 # Create design matrix from phenotype data
 design.matrix <- model.matrix(~0+factor(mirna.eset$`group:ch1`))
@@ -82,36 +100,29 @@ design.matrix <- model.matrix(~0+factor(mirna.eset$`group:ch1`))
 # Name groups in design matrix as MHO and MUO
 colnames(design.matrix) <- c("MHO","MUO")
 
-
 # Switch to compare results
-#contrast.matrix<-makeContrasts(MUO-MHO, levels=design)
 contrast.matrix<-makeContrasts(MHO-MUO, levels=design.matrix)
-expr <- exprs(mirna.eset)
 
 # Fit to linear model, apply empirical bayes
-#mirna.lmfit <- lmFit(mirna.eset, design.matrix)
 mirna.lmfit <- lmFit(mirna.eset, design.matrix)
 mirna.contr.fit <- contrasts.fit(mirna.lmfit, contrast.matrix)
 mirna.fit <- eBayes(mirna.contr.fit)
 
 # Extract differentially expressed miRNAs with topTable
 n.features <- dim(mirna.eset)['Features']
-
-# TODO - get correct number of diff expressed
 mirna.diff.expr <- topTable(mirna.fit, 
                             coef=1, 
                             adjust.method = "none", 
-                            p.value = 0.5, 
+                            p.value = 0.05, 
                             n=n.features,
                             sort.by = "p")
-# Show number of miRNA
-dim(mirna.diff.expr)
-```
 
-#### Volcano Plot
-- TODO doesnt match up
-```{r diffexprresults}
+# Show number of diff. expressed miRNA
+dim(mirna.diff.expr)
+
+# Volcano plot
 volcanoplot(mirna.fit)
+
 ```
 
 #### Heatmap
@@ -120,9 +131,14 @@ TODO!! Make it correct, doesnt match up
 ```{r heatmap}
 library(pheatmap)
 
+
+# Heatmap method 1 - use annotation row
 # Use only significant miRNAs
 mirna.eset.2 <- mirna.eset[mirna.diff.expr$ID]
 expr <- t(exprs(mirna.eset.2))
+
+# Not sure how to cluster within groups
+
 
 # Isolate groups and rejoin
 muo.group <- mirna.eset.2[,mirna.eset.2$source_name_ch1 == "serum_MUO"]
@@ -136,13 +152,6 @@ rownames(expr.mho) <- gsub("CB", "MHO", mho.group$title)
 expr.by.groups <- rbind(expr.muo, expr.mho)
 
 
-# Heatmap - method 1
-pheatmap(expr.by.groups, cutree_rows = 2, 
-         clustering_distance_rows = "correlation")
-
-# Heatmap method 2 - use annotation row
-# Not sure how to cluster within groups
-
 # Make annotation data for heatmap
 annotation <- pData(mirna.eset.2)["group:ch1"]
 rownames(annotation) <- rownames(expr.by.groups)
@@ -151,7 +160,13 @@ pheatmap(expr.by.groups,
          scale="none",
          annotation_row = annotation,
          #gaps_row = 5, 
+         #labels_row = ,
          fontsize_col = 2)
+
+
+pheatmap(expr.by.groups, cutree_rows = 2, 
+         clustering_distance_rows = "correlation")
+
 
 ```
 
@@ -160,6 +175,41 @@ pheatmap(expr.by.groups,
 
 - Query database for validated targets using miRNA ids
 - Show top 5 up and down-regulated miRNAs with predicted gene targets
+
+
+```{r}
+has.targets <- subset(mirna.diff.expr, mirna.diff.expr$Target.Genes != '---')
+sw.mti <- subset(has.targets, startsWith(has.targets$Target.Genes,"MTI"))
+up <- subset(sw.mti, sw.mti$logFC>0)
+down <- subset(sw.mti, sw.mti$logFC<0)
+
+up.5 <- up[1:5,]
+# Parse target symbols out of the Target Genes value in ExpressionSet
+# Values look like: "word // word // target symbol /// word // word // target symbol /// ...etc
+parse_target_data <- function(diff.expr.results) {
+  
+  i <- 0
+  target.lists <- list()
+  for (target.genes.str in up.5$Target.Genes) {
+    i <- i+1
+    target.list <- c()
+    for (target in strsplit(target.genes.str, " /// ")) {
+      for (info in strsplit(target, " // ")) {
+        symbol <- info[3]
+        target.list <- append(target.list, target)
+      }
+    }
+    target.lists[[i]] <- unlist(target.list)
+  }
+  diff.expr.results$Target.Genes <- target.lists
+  return(diff.expr.results)
+}
+
+up.5 <- parse_target_data(up.5)
+
+
+```
+
 ```{r upreg}
 library(multiMiR)
 
@@ -313,7 +363,7 @@ pv.out <- pathview(gene.data = -log10(p.values),
 ```
 
 #### Results
-
+- TODO! Fix up results (after they are working probably)
 
 Top 40 biological processes + pathways associated with up- and down-regulated miRNAs in MUO individuals
 ```{r}
