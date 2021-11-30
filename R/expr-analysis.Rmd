@@ -71,6 +71,8 @@ experimentData(mirna.eset)
 # Phenotype data
 phenoData(mirna.eset)
 varLabels(mirna.eset)
+pData(mirna.eset)
+
 
 # Feature data
 featureData(mirna.eset)
@@ -95,7 +97,7 @@ library(limma)
 #dim(mirna.eset)
 
 # Create design matrix from phenotype data
-design.matrix <- model.matrix(~0+factor(mirna.eset$`group:ch1`))
+design.matrix <- model.matrix(~0 + mirna.eset$`group:ch1`)
 
 # Name groups in design matrix as MHO and MUO
 colnames(design.matrix) <- c("MHO","MUO")
@@ -126,47 +128,32 @@ volcanoplot(mirna.fit)
 ```
 
 #### Heatmap
-TODO!! Make it correct, doesnt match up
-- 156 columns, 20 rows
 ```{r heatmap}
 library(pheatmap)
 
 
-# Heatmap method 1 - use annotation row
-# Use only significant miRNAs
+# Make expression matrix, make sample names match up to figure
 mirna.eset.2 <- mirna.eset[mirna.diff.expr$ID]
+
+mirna.eset.2$title[mirna.eset.2$`group:ch1` == "unhealthy"]<-gsub(
+  "CB",
+  "MUO",
+  mirna.eset.2$title[mirna.eset.2$`group:ch1` == "unhealthy"])
+
+mirna.eset.2$title[mirna.eset.2$`group:ch1` == "healthy"]<-gsub(
+  "CB",
+  "MHO",
+  mirna.eset.2$title[mirna.eset.2$`group:ch1` == "healthy"])
+
+colnames(mirna.eset.2) <- mirna.eset.2$title
 expr <- t(exprs(mirna.eset.2))
 
-# Not sure how to cluster within groups
-
-
-# Isolate groups and rejoin
-muo.group <- mirna.eset.2[,mirna.eset.2$source_name_ch1 == "serum_MUO"]
-expr.muo <- t(exprs(muo.group))
-rownames(expr.muo) <- gsub("CB", "MUO", muo.group$title)
-
-mho.group <- mirna.eset.2[,mirna.eset.2$source_name_ch1 == "serum_MHO"]
-expr.mho <- t(exprs(mho.group))
-rownames(expr.mho) <- gsub("CB", "MHO", mho.group$title)
-
-expr.by.groups <- rbind(expr.muo, expr.mho)
-
-
-# Make annotation data for heatmap
-annotation <- pData(mirna.eset.2)["group:ch1"]
-rownames(annotation) <- rownames(expr.by.groups)
-
-pheatmap(expr.by.groups, 
-         scale="none",
-         annotation_row = annotation,
-         #gaps_row = 5, 
-         #labels_row = ,
+pheatmap(expr,
+         #cutree_rows = 2,
+         scale = "column",
+         clustering_distance_rows = "correlation",
+         clustering_distance_cols = "correlation",
          fontsize_col = 2)
-
-
-pheatmap(expr.by.groups, cutree_rows = 2, 
-         clustering_distance_rows = "correlation")
-
 
 ```
 
