@@ -48,8 +48,8 @@ install.packages("BiocManager")
 install.packages("devtools")
 
 # Bioconductor library installs
-BiocManager::install(c("GEOquery","affy","oligo", "pd.mirna.4.0","multiMiR",
-                       "mirbase.db","miRBaseConverter","pathway"))
+BiocManager::install(c("GEOquery","affy","oligo","pd.mirna.4.0","multiMiR",
+                       "mirbase.db","pathway","gage"))
 ```
 
 Get data from GEO with GEOquery package
@@ -63,8 +63,10 @@ geo.acc <- "GSE169290"
 geo.data <- getGEO(GEO = geo.acc, destdir = data.dir, GSEMatrix = TRUE) 
 
 # Retrieve matrix data and store it in R object, echo summary
-(mirna.eset <- geo.data$GSE169290_series_matrix.txt.gz)
-
+mirna.eset <- geo.data$GSE169290_series_matrix.txt.gz
+```
+# Summarize dataset
+```{r eval=FALSE, include=FALSE}
 # Experiment data
 experimentData(mirna.eset)
 
@@ -72,7 +74,6 @@ experimentData(mirna.eset)
 phenoData(mirna.eset)
 varLabels(mirna.eset)
 pData(mirna.eset)
-
 
 # Feature data
 featureData(mirna.eset)
@@ -88,7 +89,7 @@ mirna.eset$`group:ch1`
 ## Microarray Analysis
 ### Differential expression of miRNAs 
 - TODO! Doesnt match up
-```{r diffexpr, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+```{r diffexpr, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
 library(limma)
 
 # Filter out non-mature miRNAs (accession does not start with MIMA)
@@ -103,7 +104,7 @@ design.matrix <- model.matrix(~0 + mirna.eset$`group:ch1`)
 colnames(design.matrix) <- c("MHO","MUO")
 
 # Switch to compare results
-contrast.matrix<-makeContrasts(MHO-MUO, levels=design.matrix)
+contrast.matrix<-makeContrasts(MUO-MHO, levels=design.matrix)
 
 # Fit to linear model, apply empirical bayes
 mirna.lmfit <- lmFit(mirna.eset, design.matrix)
@@ -111,6 +112,7 @@ mirna.contr.fit <- contrasts.fit(mirna.lmfit, contrast.matrix)
 mirna.fit <- eBayes(mirna.contr.fit)
 
 # Extract differentially expressed miRNAs with topTable
+# p-val < 0.05
 n.features <- dim(mirna.eset)['Features']
 mirna.diff.expr <- topTable(mirna.fit, 
                             coef=1, 
@@ -119,12 +121,11 @@ mirna.diff.expr <- topTable(mirna.fit,
                             n=n.features,
                             sort.by = "p")
 
-# Show number of diff. expressed miRNA
+# Show number of diff. expressed miRNA (comp. to 159)
 dim(mirna.diff.expr)
 
 # Volcano plot
 volcanoplot(mirna.fit)
-
 ```
 
 #### Heatmap
@@ -132,9 +133,10 @@ volcanoplot(mirna.fit)
 library(pheatmap)
 
 
-# Make expression matrix, make sample names match up to figure
+# Extract differentially expressed miRNA from expression set
 mirna.eset.2 <- mirna.eset[mirna.diff.expr$ID]
 
+# Modify sample names to show group
 mirna.eset.2$title[mirna.eset.2$`group:ch1` == "unhealthy"]<-gsub(
   "CB",
   "MUO",
@@ -144,13 +146,20 @@ mirna.eset.2$title[mirna.eset.2$`group:ch1` == "healthy"]<-gsub(
   "CB",
   "MHO",
   mirna.eset.2$title[mirna.eset.2$`group:ch1` == "healthy"])
-
 colnames(mirna.eset.2) <- mirna.eset.2$title
+
+# Make expression matrix
 expr <- t(exprs(mirna.eset.2))
 
+# Generate heatmap from matrix
+# Hierarchical clustering
+# Rows centered
+# Unit variance scaling applied to rows
+# Rows and columns clustered by correlation distance + avg linkage
 pheatmap(expr,
          #cutree_rows = 2,
-         scale = "column",
+         scale = "row",
+         #scale = "column",
          clustering_distance_rows = "correlation",
          clustering_distance_cols = "correlation",
          fontsize_col = 2)
@@ -158,26 +167,37 @@ pheatmap(expr,
 ```
 
 ### Find validated target genes
-- TODO! Doesnt match up
+- Top 5 up + down successfully replicated
 
 - Query database for validated targets using miRNA ids
 - Show top 5 up and down-regulated miRNAs with predicted gene targets
 
 
-```{r}
-has.targets <- subset(mirna.diff.expr, mirna.diff.expr$Target.Genes != '---')
-sw.mti <- subset(has.targets, startsWith(has.targets$Target.Genes,"MTI"))
-up <- subset(sw.mti, sw.mti$logFC>0)
-down <- subset(sw.mti, sw.mti$logFC<0)
+Parsing out targets already included
+```{r eval=FALSE, include=FALSE}
+#has.targets <- subset(mirna.diff.expr, mirna.diff.expr$Target.Genes != '---')
+#sw.mti <- subset(has.targets, startsWith(has.targets$Target.Genes,"MTI"))
+#up <- subset(sw.mti, sw.mti$logFC>0)
+#down <- subset(sw.mti, sw.mti$logFC<0)
 
-up.5 <- up[1:5,]
+# Differentially expressed miRNAs with positive log2 fold change
+upreg <- subset(mirna.diff.expr, mirna.diff.expr$logFC>0)
+dim(upreg)
+
+# Differentially expressed miRNAs with negative log2 fold change
+downreg <- subset(mirna.diff.expr, mirna.diff.expr$logFC<0)
+dim(downreg)
+
+up.5 <- upreg[1:5,]
+down.5 <- downreg[1:5,]
+
 # Parse target symbols out of the Target Genes value in ExpressionSet
 # Values look like: "word // word // target symbol /// word // word // target symbol /// ...etc
 parse_target_data <- function(diff.expr.results) {
   
   i <- 0
   target.lists <- list()
-  for (target.genes.str in up.5$Target.Genes) {
+  for (target.genes.str in diff.expr.results$Target.Genes) {
     i <- i+1
     target.list <- c()
     for (target in strsplit(target.genes.str, " /// ")) {
@@ -193,37 +213,60 @@ parse_target_data <- function(diff.expr.results) {
 }
 
 up.5 <- parse_target_data(up.5)
+down.5 <- parse_target_data(down.5)
 
+print(up.5[c("miRNA_ID","logFC","P.Value")])
+print(down.5[c("miRNA_ID","logFC","P.Value")])
 
 ```
 
-```{r upreg}
+- Manually find targets using miRTarBase and TargetScanHuman
+Upreg
+```{r upreg, eval=FALSE, include=FALSE}
 library(multiMiR)
 
-# Differentially expressed miRNAs with positive log2 fold change
-mirna.up <- subset(mirna.diff.expr, mirna.diff.expr$logFC>0)
-mirbase.query.up <- get_multimir(org = 'hsa', mirna = mirna.up$miRNA_ID, 
+# Query miRTarBase with upregulated miRNA IDs
+mirbase.query.up <- get_multimir(org = 'hsa', mirna = upreg$miRNA_ID, 
                                 table = 'mirtarbase', 
+                                predicted.cutoff = 20,
                                 predicted.cutoff.type = "p")
 mirbase.data.up <- mirbase.query.up@data
 
+mirbase.data.up
+# Probably do something else
+
+
+# What i tried before... top genes incorrect
 # Map miRNA ids to results
-index <- match(mirna.up$miRNA_ID, mirbase.data.up$mature_mirna_id)
-upreg.targets <- mirbase.data.up[index,]
+#index <- match(upreg$miRNA_ID, mirbase.data.up$mature_mirna_id)
+#upreg.targets <- mirbase.data.up[index,]
 
 # Generate table with results
-mirna.upreg <- as.data.frame(
-  cbind(upreg.targets$mature_mirna_id,
-        upreg.targets$target_symbol,
-        mirna.up$logFC,
-        mirna.up$P.Value))
-colnames(mirna.upreg) <- c("Name","Target Gene","Log Fold Change","p-value")
+#mirna.upreg <- as.data.frame(
+#  cbind(upreg.targets$mature_mirna_id,
+#        upreg.targets$target_symbol,
+#        upreg$logFC,
+#        upreg$P.Value))
+#colnames(mirna.upreg) <- c("Name","Target Gene","Log Fold Change","p-value")
+#mirna.upreg[1:5,]
 
-# Show top 5
-mirna.upreg[1:5,]
+# Extract all target genes for each
+up.5.data <- subset(mirbase.data.up, mirbase.data.up$mature_mirna_id%in%up.5$miRNA_ID)
+
+x<-up.5$miRNA_ID[1]
+x.targs <- up.5.data[up.5.data$mature_mirna_id==x,]
+#x.targs <- up.5.data[up.5.data$mature_mirna_id==x,c("target_symbol")]
+
+x.targs
+unique(x.targs$target_symbol)
+freq <- as.data.frame(table(x.targs$target_symbol))
+
+freq[freq$Freq > 1,]
+
 ```
 
-```{r downreg}
+Downreg
+```{r downreg, eval=FALSE, include=FALSE}
 library(multiMiR)
 # Differentially expressed miRNA with negative log2 fold change
 mirna.down <- subset(mirna.diff.expr, mirna.diff.expr$logFC<0)
@@ -254,10 +297,15 @@ mirna.downreg[1:5,]
 ```
 
 ### Biological Pathway Assignment
-- TODO! Finish generating results
+- Manually with GO, KEGG, Biocarta and WikiPathways databases
+
+[kegg.gs: Common gene set data collections](https://www.rdocumentation.org/packages/gage/versions/2.22.0/topics/kegg.gs)
+
+GO Terms
 ```{r}
 #BiocManager::install(c("ontologyIndex", "ontologySimilarity"))
 #install.packages("paintmap")
+
 library(ontologyIndex)
 library(ontologySimilarity)
 library(paintmap)
@@ -287,24 +335,76 @@ sim_matrix <- get_sim_grid(
 # TODO - find the output
 ```
 
+KEGG Pathway
+```{r}```
+
+Biocarta
+```{r}
+BiocManager::install("gage")
+library(gage)
+
+# Need expression matrix
+# And Entrez symbols for genes
+
+data(kegg.gs)
+data(go.gs)
+data("carta.gs")  
+
+# ExpressionSet for just top 10 mirna
+up.eset <- mirna.eset.2[mirna.eset.2@featureData@data$miRNA_ID%in%up.10$miRNA_ID]
+# convert to matrix, set rownames as entrez
+up.expr <- exprs(up.eset)
+rownames(up.expr) <- mirbase.data.up[1:length(rownames(up.expr)),]$target_symbol
+up.expr
+gage::sym2eg()
+
+carta.prep <- gagePrep(exprs = up.expr,
+              gsets = carta.gs,
+                same.dir = TRUE,
+              ref = which(startsWith(colnames(up.expr),"MHO")),
+              samp = which(startsWith(colnames(up.expr),"MUO")))
+
+carta.up <- gage(exprs = carta.prep,
+              gsets = carta.gs,
+                same.dir = TRUE,
+              #ref = which(startsWith(colnames(carta.prep),"MHO")),
+              #samp = which(startsWith(colnames(carta.prep),"MUO"))
+              )
+
+carta.up$stats[!is.na(carta.up$stats)]
+
+carta.sum <- gageSum(carta.up)
+
+kegg.up <- gage(exprs = up.expr,
+                gsets = kegg.gs,
+                same.dir = TRUE,
+                ref = which(startsWith(colnames(up.expr),"MHO")),
+                samp = which(startsWith(colnames(up.expr),"MUO")))
+go.up <- gage(exprs = up.expr,
+              gsets = go.gs,
+              ref = which(startsWith(colnames(up.expr),"MHO")),
+              samp = which(startsWith(colnames(up.expr),"MUO")))
+
+dim(kegg.up$greater)
+dim(kegg.up$less)
+dim(kegg.up$stats)
+
+carta.up$stats
+kegg.up$stats
+
+```
 
 ## In silico target prediction
 ### miRNA target prediction and KEGG pathway analysis
 ### Target gene analysis with miRDB
-- total of 4389 affected genes for top 10 upregulated miRNAs
-- selected target genes with target score > 80
-- remove duplicated and triplicates
-- KEGG pathway analysis on 1.104 predicted target genes
-- predicted gene targets signif. enriched for 53 terms
-
-- TODO! ...a lot
 ```{r}
 # Top 10 upregulated miRNAs
-top.upreg.mirnas <- mirna.up[1:10,]
+up.10 <- upreg[1:10,]
 
 # Search miRDB
-silico.targets <- get_multimir(mirna = top.upreg.mirnas$miRNA_ID, 
-                               org = "hsa", predicted.cutoff = 80, 
+silico.targets <- get_multimir(mirna = up.10$miRNA_ID, 
+                               org = "hsa", 
+                               #predicted.cutoff = 80, 
                                table="mirdb")
 silico.target.data <- as.data.frame(silico.targets@data)
 dim(silico.target.data) # Number of affected genes
@@ -319,8 +419,16 @@ dim(silico.target.data)
 
 # TODO - keep going here.
 ```
+- total of 4389 affected genes for top 10 upregulated miRNAs
+- selected target genes with target score > 80
+- remove duplicated and triplicates
+- KEGG pathway analysis on 1.104 predicted target genes
+- predicted gene targets signif. enriched for 53 terms
+
 
 ### KEGG Pathway analysis - not working
+Upregulated GO/pathway terms specific for target genes 
+
 ```{r}
 library(pathview)
 # May or may not need
@@ -338,26 +446,22 @@ pathview(gene.data = -log10(p.values),
          pathway.id = silico.target.data$target_entrez, 
          out.suffix = "kegg_pathway_up")
 
+
+
+
 # assign entrez ids to pvalues
-p.values <- as.numeric(mirna.downreg$`p-value`)
-names(p.values) <- downreg.targets$target_entrez
+#p.values <- as.numeric(mirna.downreg$`p-value`)
+#names(p.values) <- downreg.targets$target_entrez
 
 # remove entries with no entrez ids
-pv.out <- pathview(gene.data = -log10(p.values), 
-                   pathway.id = silico.target.data$target_entrez,
-                   species = "hsa", 
-                   out.suffix = "kegg_pathway")
+#pv.out <- pathview(gene.data = -log10(p.values), 
+#                   pathway.id = silico.target.data$target_entrez,
+#                   species = "hsa", 
+#                   out.suffix = "kegg_pathway")
 ```
 
 #### Results
 - TODO! Fix up results (after they are working probably)
-
-Top 40 biological processes + pathways associated with up- and down-regulated miRNAs in MUO individuals
-```{r}
-```
-Upregulated GO/pathway terms specific for target genes 
-```{r}
-```
 
 # References
 ```{r}
