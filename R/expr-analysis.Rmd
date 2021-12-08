@@ -81,6 +81,7 @@ varMetadata(mirna.eset)
 
 # Data processing info
 mirna.eset$data_processing[1]
+mirna.eset$data_row_count
 
 # Group labels
 mirna.eset$`group:ch1`
@@ -88,7 +89,7 @@ mirna.eset$`group:ch1`
 
 ## Microarray Analysis
 ### Differential expression of miRNAs 
-- TODO! Doesnt match up
+
 ```{r diffexpr, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
 library(limma)
 
@@ -121,17 +122,23 @@ mirna.diff.expr <- topTable(mirna.fit,
                             n=n.features,
                             sort.by = "p")
 
+# Upregulated and downregulated
+mirna.up <- subset(mirna.diff.expr, mirna.diff.expr$logFC>0)
+mirna.down <- subset(mirna.diff.expr, mirna.diff.expr$logFC<0)
+
+# Extract differentially expressed miRNA from expression set
+mirna.eset.diff.expr <- mirna.eset[mirna.diff.expr$ID]
+
 # Show number of diff. expressed miRNA (comp. to 159)
 dim(mirna.diff.expr)
 
-# Volcano plot
+# Volcano plot, label 3 miRNA
 volcanoplot(mirna.fit)
 ```
 
 #### Heatmap
 ```{r heatmap}
 library(pheatmap)
-
 
 # Extract differentially expressed miRNA from expression set
 mirna.eset.2 <- mirna.eset[mirna.diff.expr$ID]
@@ -158,8 +165,8 @@ expr <- t(exprs(mirna.eset.2))
 # Rows and columns clustered by correlation distance + avg linkage
 pheatmap(expr,
          #cutree_rows = 2,
-         scale = "row",
-         #scale = "column",
+         #scale = "row",
+         scale = "column",
          clustering_distance_rows = "correlation",
          clustering_distance_cols = "correlation",
          fontsize_col = 2)
@@ -221,47 +228,46 @@ print(down.5[c("miRNA_ID","logFC","P.Value")])
 ```
 
 - Manually find targets using miRTarBase and TargetScanHuman
-Upreg
+Upregulated genes
 ```{r upreg, eval=FALSE, include=FALSE}
 library(multiMiR)
 
 # Query miRTarBase with upregulated miRNA IDs
-mirbase.query.up <- get_multimir(org = 'hsa', mirna = upreg$miRNA_ID, 
+mirbase.query.up <- get_multimir(org = 'hsa', mirna = mirna.up$miRNA_ID, 
                                 table = 'mirtarbase', 
                                 predicted.cutoff = 20,
                                 predicted.cutoff.type = "p")
 mirbase.data.up <- mirbase.query.up@data
 
-mirbase.data.up
-# Probably do something else
-
 
 # What i tried before... top genes incorrect
 # Map miRNA ids to results
-#index <- match(upreg$miRNA_ID, mirbase.data.up$mature_mirna_id)
-#upreg.targets <- mirbase.data.up[index,]
+index <- match(mirna.up$miRNA_ID, mirbase.data.up$mature_mirna_id)
+upreg.targets <- mirbase.data.up[index,]
 
 # Generate table with results
-#mirna.upreg <- as.data.frame(
-#  cbind(upreg.targets$mature_mirna_id,
-#        upreg.targets$target_symbol,
-#        upreg$logFC,
-#        upreg$P.Value))
-#colnames(mirna.upreg) <- c("Name","Target Gene","Log Fold Change","p-value")
-#mirna.upreg[1:5,]
+mirna.upreg <- as.data.frame(
+  cbind(upreg.targets$mature_mirna_id,
+        upreg.targets$target_symbol,
+        mirna.up$logFC,
+        mirna.up$P.Value))
+colnames(mirna.upreg) <- c("Name","Target Gene","Log Fold Change","p-value")
 
-# Extract all target genes for each
-up.5.data <- subset(mirbase.data.up, mirbase.data.up$mature_mirna_id%in%up.5$miRNA_ID)
+#Print top 5
+mirna.upreg[1:5,]
 
-x<-up.5$miRNA_ID[1]
-x.targs <- up.5.data[up.5.data$mature_mirna_id==x,]
+# Extract all target genes for top 5
+#up.5 <- mirna.up[1:5,]
+#up.5.data <- subset(mirbase.data.up, mirbase.data.up$mature_mirna_id%in%up.5$miRNA_ID)
+#uniq.targets.up <- unique(up.5.data$target_symbol)
+
+# Correct target symbols found in the target but not top frequency or otherwise identifiable.
+
+#x.targs <- up.5.data[up.5.data$mature_mirna_id==unique(up.5.data$mature_mirna_id)]
 #x.targs <- up.5.data[up.5.data$mature_mirna_id==x,c("target_symbol")]
 
-x.targs
-unique(x.targs$target_symbol)
-freq <- as.data.frame(table(x.targs$target_symbol))
-
-freq[freq$Freq > 1,]
+# Table with frequencies
+#freq <- as.data.frame(table(x.targs))
 
 ```
 
@@ -269,12 +275,12 @@ Downreg
 ```{r downreg, eval=FALSE, include=FALSE}
 library(multiMiR)
 # Differentially expressed miRNA with negative log2 fold change
-mirna.down <- subset(mirna.diff.expr, mirna.diff.expr$logFC<0)
 mirbase.query.down <- get_multimir(org = 'hsa', mirna = mirna.down$miRNA_ID, 
                                 table = 'mirtarbase', 
                                 predicted.cutoff.type = "p")
 mirbase.data.down <- mirbase.query.down@data
 
+# What i tried before... top genes incorrect
 # Map miRNA ids to results
 index <- match(mirna.down$miRNA_ID, mirbase.data.down$mature_mirna_id)
 downreg.targets <- mirbase.data.down[index,]
@@ -294,6 +300,19 @@ colnames(mirna.downreg) <- c("Name","Target Gene","Log Fold Change","p-value")
 
 # Print top 5
 mirna.downreg[1:5,]
+
+# Extract all target genes for top 5
+#down.5 <- mirna.down[1:5,]
+#down.5.data <- subset(mirbase.data.down, mirbase.data.down$mature_mirna_id%in%down.5$miRNA_ID)
+#uniq.targets.down <- unique(down.5.data$target_symbol)
+
+# Correct target symbols found in the target but not top frequency or otherwise identifiable.
+
+#x.targs <- down.5.data[down.5.data$mature_mirna_id==unique(down.5.data$mature_mirna_id)]
+#x.targs <- down.5.data[down.5.data$mature_mirna_id==x,c("target_symbol")]
+
+# Table with frequencies
+#freq <- as.data.frame(table(x.targs))
 ```
 
 ### Biological Pathway Assignment
@@ -332,13 +351,10 @@ sim_matrix <- get_sim_grid(
     information_content=GO_IC,
     term_sets=terms)
 
-# TODO - find the output
+
 ```
 
-KEGG Pathway
-```{r}```
-
-Biocarta
+All pathway analyses with GAGE
 ```{r}
 BiocManager::install("gage")
 library(gage)
@@ -399,7 +415,7 @@ kegg.up$stats
 ### Target gene analysis with miRDB
 ```{r}
 # Top 10 upregulated miRNAs
-up.10 <- upreg[1:10,]
+up.10 <- mirna.up[1:10,]
 
 # Search miRDB
 silico.targets <- get_multimir(mirna = up.10$miRNA_ID, 
@@ -417,7 +433,7 @@ silico.target.data <- subset(silico.target.data,
                              !duplicated(silico.target.data$target_symbol))
 dim(silico.target.data)
 
-# TODO - keep going here.
+
 ```
 - total of 4389 affected genes for top 10 upregulated miRNAs
 - selected target genes with target score > 80
@@ -459,9 +475,6 @@ pathview(gene.data = -log10(p.values),
 #                   species = "hsa", 
 #                   out.suffix = "kegg_pathway")
 ```
-
-#### Results
-- TODO! Fix up results (after they are working probably)
 
 # References
 ```{r}
