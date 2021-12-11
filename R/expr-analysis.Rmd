@@ -227,6 +227,7 @@ print(down.5[c("miRNA_ID","logFC","P.Value")])
 #### Upregulated
 ```{r upreg, echo=TRUE}
 library(multiMiR)
+citation("pd.mirna.4.0")
 
 # Query miRTarBase with upregulated miRNA IDs
 mirbase.query.up <- get_multimir(org = 'hsa', mirna = mirna.up$miRNA_ID, 
@@ -245,7 +246,7 @@ upreg.targets <- mirbase.data.up[index,]
 mirna.upreg <- as.data.frame(
   cbind(upreg.targets$mature_mirna_id,
         upreg.targets$target_symbol,
-        signif(2^(mirna.up$logFC), digits = 2),
+        signif(2^(mirna.up$logFC), digits = 3),
         signif(mirna.up$P.Value, digits = 2)))
 colnames(mirna.upreg) <- c("Name","Target Gene","Fold Change","p-value")
 
